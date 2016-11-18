@@ -5,15 +5,17 @@ library(proj4)
 library(doParallel)
 library(foreach)
 
-setwd("D:/Eawag/course - Spatial Modelling/ClimateVelocity/ClimVelocity")
+setwd("D:/Eawag/course - Spatial Modelling/ClimateVelocity/")
 
 # Current climate must be divided by 100 to get degrees Celsius
-cc <- stack("current_climate/currentclimate_1971-2000.grd")
+cc <- stack("inputs/current_climate/currentclimate_1971-2000.grd")
 
-fc1 <- stack("future_climate/rcp45/CLMcom_CCLM4-8-17_MOHC_HadGEM2-ES_ar5_wc_rcp45.grd")
-fc2 <- stack("future_climate/rcp45/DMI_HIRHAM5_ICHEC_EC-EARTH_ar5_wc_rcp45.grd")
-fc3 <- stack("future_climate/rcp45/KNMI_RACMO22E_ICHEC_EC-EARTH_ar5_wc_rcp45.grd")
+fc1 <- stack("inputs/future_climate/rcp45/CLMcom_CCLM4-8-17_MOHC_HadGEM2-ES_ar5_wc_rcp45.grd")
+# fc2 <- stack("inputs/future_climate/rcp45/DMI_HIRHAM5_ICHEC_EC-EARTH_ar5_wc_rcp45.grd")
+# fc3 <- stack("inputs/future_climate/rcp45/KNMI_RACMO22E_ICHEC_EC-EARTH_ar5_wc_rcp45.grd")
 
+cc <- crop(cc, extent(c(5e5, 1e6, 0, 5e5)))
+fc1 <- crop(fc1, extent(c(5e5, 1e6, 0, 5e5)))
 
 # present <- rasterToPoints(cc)
 # present[, "tas"] <- present[, "tas"]/100 # Get degrees Celsius
@@ -95,7 +97,7 @@ for (i in 1:l){
 cl <- makeCluster(4)
 registerDoParallel(cl)
 
-l <- length(ptemp) # 2,695,527 elements
+l <- length(ptemp) # ~ 250,000 elements
 system.time(output <- foreach(i = 1:l, .combine=rbind) %dopar% {
   # get the median future climate value within temperature limits
   target <- median(ftemp[ftemp > lower[i] & ftemp < upper[i]])
