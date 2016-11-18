@@ -5,7 +5,7 @@ library(proj4)
 library(doParallel)
 library(foreach)
 
-setwd("D:/Eawag/course - Spatial Modelling/project/inputs")
+setwd("D:/Eawag/course - Spatial Modelling/ClimateVelocity/ClimVelocity")
 
 # Current climate must be divided by 100 to get degrees Celsius
 cc <- stack("current_climate/currentclimate_1971-2000.grd")
