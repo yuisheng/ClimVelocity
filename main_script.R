@@ -7,159 +7,116 @@ library(foreach)
 
 setwd("D:/Eawag/course - Spatial Modelling/ClimateVelocity/")
 
+# ch <- read.csv('inputs/Swiss_border_coordinates.dat', sep='\t', header=TRUE, stringsAsFactors = FALSE)
+# ch <- ch[, c("POINT_X", "POINT_Y")]
 # Current climate must be divided by 100 to get degrees Celsius
 cc <- stack("inputs/current_climate/currentclimate_1971-2000.grd")
+cc <- crop(cc, extent(c(5e5, 1e6, 0, 5e5)))
 
 fc1 <- stack("inputs/future_climate/rcp45/CLMcom_CCLM4-8-17_MOHC_HadGEM2-ES_ar5_wc_rcp45.grd")
 # fc2 <- stack("inputs/future_climate/rcp45/DMI_HIRHAM5_ICHEC_EC-EARTH_ar5_wc_rcp45.grd")
 # fc3 <- stack("inputs/future_climate/rcp45/KNMI_RACMO22E_ICHEC_EC-EARTH_ar5_wc_rcp45.grd")
 
-cc <- crop(cc, extent(c(5e5, 1e6, 0, 5e5)))
 fc1 <- crop(fc1, extent(c(5e5, 1e6, 0, 5e5)))
+# fc2 <- crop(fc2, extent(c(5e5, 1e6, 0, 5e5)))
+# fc3 <- crop(fc3, extent(c(5e5, 1e6, 0, 5e5)))
 
-# present <- rasterToPoints(cc)
-# present[, "tas"] <- present[, "tas"]/100 # Get degrees Celsius
-# f <- rasterToPoints(fc1)
+### FUNCTION: ToCell
+# Purpose: ToCell() takes one present and one future climate raster, one climate variable of interest, and a desired climate change "window" or "accuracy" to compute the future climate 
+# cell with the nearest value to every present climate cell. 
 
+# Implementation: decomposes rasters to matrices and matrices to vectors, 
+#   uses indices, and loops through present climate vectors in parallel 
 
-# For every current climate cell, get future climate cells within climate window
-# Apply() approach:
-# upper/lower temp values calculated within each iteration
-# all objects are deleted ASAP
-#
-# p <- as.vector(present[,3])
-# 
-# sapply(p, function(x){
-#   # define temperature limits
-#   upper <- x + accuracy
-#   lower <- x - accuracy
-#   
-#   # get median future climate that falls within temperature limits of cell
-#   target <- median(f[ f[ ,3] < upper & f[ ,3] > lower, 1:3])
-#   
-#   rm(upper, lower)
-#   # within the future temperature, get the cell closest to the target
-#   to.cell <- f[which.min(abs(f[, 3] - target)), 1:3]
-#   
-#   rm(target)
-#   return(to.cell)
-# })
+# Arguments:
+# - pRaster: cropped present climate raster
+# - fRaster: cropped future climate raster
+# - climVar: string of climate variable: tas or prcp
+# - accuracy: future cells with value within present cell value +/- accuracy (integer)
+# - cores: number of physical CPU cores to be used in computation (integer)
 
-# ### LOOP approach ###:
-# Upper/lower temp values calculated beforehand, added to present climate matrix
-# Column names never used; index locations used for performance
-# Length of vector calculated only once
-# 
-# calculate upper and lower temperature per cell
-present <- rasterToPoints(cc)
-present[, "tas"] <- present[, "tas"]/100 # Get degrees Celsius
-f <- rasterToPoints(fc1)
-
-accuracy <- 1
-px <- as.vector(present[, 1])
-py <- as.vector(present[, 2])
-ptemp <- as.vector(present[, 3])
-pprecip <- as.vector(present[, 4])
-upper <- ptemp + accuracy
-lower <- ptemp - accuracy
-# plist <- list(px, py, ptemp, pprecip, upper, lower) 
-# plist <- lapply(seq_len(ncol(present)), function(i) present[,i])
-
-fx <- as.vector(f[, 1])
-fy <- as.vector(f[, 2])
-ftemp <- as.vector(f[, 3])
-fprecip <- as.vector(f[, 4])
-
-# Pre-allocate matrix containing results
-# d <- matrix(nrow=nrow(present), ncol=3) # preallocate matrix
-
-l <- length(ptemp) # 2,695,527 elements
-for (i in 1:l){
-  # get future climate that falls within temperature limits of cell
-  cat(i, "\n")
-  target <- median(ftemp[ftemp > lower[i] & ftemp < upper[i]])
-  if (is.na(target) == TRUE){
-    to.cell <- c(NA, NA, NA)
-  }
+# Outputs:
+# Outputs list of two matrix objects of equal dimensions:
+# - "fromcell" contains x/y/climVar of current climate cells (vector start point)
+# - "tocell" contains x/y/climVar of future cells corresponding to current climate cells (vector endpoint)
+ToCell <- function(pRaster, fRaster, climVar, accuracy, cores) {
+  # Convert input rasters to matrices
+  p <- rasterToPoints(pRaster)
+  f <- rasterToPoints(fRaster)
   
-  else {
-    # within the future temperature, locate the cell closest to the target
-    system.time(index <- which.min(abs(ftemp - target)))
+  # Correct temperature and precipitation values
+  p[, "tas"] <- p[, "tas"]/100
+  f[, "prcp"] <- f[, "prcp"]*10
+  
+  # Decompose input matrices into vectors
+  # Target climate vectors
+  upper <- as.vector(p[, climVar] + accuracy)
+  lower <- as.vector(p[, climVar]) - accuracy
+  # Future climate vectors
+  fx <- as.vector(f[, "x"])
+  fy <- as.vector(f[, "y"])
+  fvar <- as.vector(f[, climVar])
+  
+  # Prepare parallelized loop
+  # Create cluster of worker processes
+  cl <- makeCluster(cores)
+  registerDoParallel(cl)
+  # Determine number of iterations
+  l <- nrow(p)
+  
+  # Distribute loop to workers, rbind results
+  system.time(out <- foreach(i = 1:l, .combine=rbind) %dopar% {
+    # get the median future climate value within temperature limits
+    target <- median(fvar[fvar > lower[i] & fvar < upper[i]])
     
-    rm(target)
-    # Retrieve the information for the located cell
-    
-    to.cell <- c(fx[index], fy[index], ftemp[index])
-  }
-}
-
-### Parallelized loop ###
-cl <- makeCluster(4)
-registerDoParallel(cl)
-
-l <- length(ptemp) # ~ 250,000 elements
-system.time(output <- foreach(i = 1:l, .combine=rbind) %dopar% {
-  # get the median future climate value within temperature limits
-  target <- median(ftemp[ftemp > lower[i] & ftemp < upper[i]])
-  if (is.na(target) == TRUE){
-    to.cell <- c(NA, NA, NA)
-  }
-  else {
-    # within the future temperature, locate the cell closest to the target
-    index <- which.min(abs(ftemp - target))
-    rm(target)
-    
-    # output the future cell information
-    to.cell <- c(fx[index], fy[index], ftemp[index])
-  }
-})
-rownames(output) <- 1:nrow(output)
-stopCluster(cl)
-
-### Compiled function ###
-library(compiler)
-
-CV <- function(ptemp, ftemp, lower, upper){
-  l <- length(ptemp) # 2,695,527 elements
-  for (i in 1:l){
-    # get future climate that falls within temperature limits of cell
-    target <- median(ftemp[ftemp > lower[i] & ftemp < upper[i]])
     if (is.na(target) == TRUE){
       to.cell <- c(NA, NA, NA)
     }
     else {
       # within the future temperature, locate the cell closest to the target
-      index <- which.min(abs(ftemp - target))
+      index <- which.min(abs(fvar - target))
       rm(target)
-      # Retrieve the information for the located cell
-      cat(i, "\n")
-      to.cell <- c(fx[index], fy[index], ftemp[index])
+      
+      # output the future cell information (x, y, climVar)
+      to.cell <- c(fx[index], fy[index], fvar[index])
     }
-  }
+  })
+  stopCluster(cl) # Stop the cluster
+  
+  rownames(out) <- 1:nrow(out)
+  colnames(out) <- c("x", "y", climVar)
+  
+  # Output list of matrices: fromcell for current climate, tocell for climate destination  
+  result <- list("fromcell" = p[, c("x", "y", climVar)], "tocell" = out)
+  return(result)
 }
 
-CVc <- cmpfun(CV)
+x <- ToCell(cc, fc1, "tas", 1, 4)
+
+colnames(x$fromcell) <- c("x1", "y1", "tas1")
+colnames(x$tocell) <- c("x2", "y2", "tas2")
+x <- cbind(x$fromcell, x$tocell)
+
+# Plot first 10 cells using XY limits
+plot(x[1,"x1"], x[1,"x1"], xlim=c(min(x[,"x1"]), max(x[,"x1"])), ylim = c(min(x[,"y1"]), max(x[,"y1"])))
+
+# Take the first ten cells and plot their vectors
+i <- x[1:10,]
+arrows(i[,1], i[,2], i[,4], i[,5])
 
 
 
-### SCRATCH ###
-# For cell x in rasterA
-# define accuracy window
-# get distances of cells in rasterB within accuracy window of cell x
-# take the mean / median distance to choose a cell in rasterB
-# calculate the vector	
 
-# <21781> +title=CH1903 / LV03 +proj=somerc +lat_0=46.95240555555556 +lon_0=7.439583333333333 +x_0=600000 +y_0=200000 +ellps=bessel +towgs84=674.374,15.056,405.346,0,0,0,0 +units=m +no_defs
 
-# # WGS 1984
-# crs.new <- "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
-# cc.new <- projectRaster(cc, crs = crs.new)
-# # Great sphere distance between lat/long points with cosine
-# distm(c(6.376007, 52.33323), c(6.388707, 52.33323), fun=distCosine)
-# 
-# # Ellipsoidal distance along lat/long points with Bessel 1841
-# distGeo(c(6.376007, 52.33323), c(6.388707, 52.33323), a = 6377397.155, f = 1/299.1528434)
-# 
-# test <- spTransform(window[,1:2], crs.new)
+
+
+
+
+
+
+
+
+
+
 
 
