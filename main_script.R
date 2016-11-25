@@ -2,6 +2,7 @@ library(rgdal)
 library(raster)
 library(sp)
 library(proj4)
+library(rasterVis)
 library(doParallel)
 library(foreach)
 
@@ -45,8 +46,8 @@ ToCell <- function(pRaster, fRaster, climVar, accuracy, cores) {
   f <- rasterToPoints(fRaster)
   
   # Correct temperature and precipitation values
-  p[, "tas"] <- p[, "tas"]/100
-  f[, "prcp"] <- f[, "prcp"]*10
+  p[, "tas"] <- round((p[, "tas"]/100), digits = 1)
+  f[, "prcp"] <- round((f[, "prcp"]*10), digits = 1)
   
   # Decompose input matrices into vectors
   # Target climate vectors
@@ -65,7 +66,7 @@ ToCell <- function(pRaster, fRaster, climVar, accuracy, cores) {
   l <- nrow(p)
   
   # Distribute loop to workers, rbind results
-  system.time(out <- foreach(i = 1:l, .combine=rbind) %dopar% {
+  out <- foreach(i = 1:l, .combine=rbind) %dopar% {
     # get the median future climate value within temperature limits
     target <- median(fvar[fvar > lower[i] & fvar < upper[i]])
     
@@ -80,7 +81,7 @@ ToCell <- function(pRaster, fRaster, climVar, accuracy, cores) {
       # output the future cell information (x, y, climVar)
       to.cell <- c(fx[index], fy[index], fvar[index])
     }
-  })
+  }
   stopCluster(cl) # Stop the cluster
   
   rownames(out) <- 1:nrow(out)
@@ -91,18 +92,24 @@ ToCell <- function(pRaster, fRaster, climVar, accuracy, cores) {
   return(result)
 }
 
-x <- ToCell(cc, fc1, "tas", 1, 4)
+x <- system.time(ToCell(cc, fc1, "tas", 1, 4))
 
 colnames(x$fromcell) <- c("x1", "y1", "tas1")
 colnames(x$tocell) <- c("x2", "y2", "tas2")
-x <- cbind(x$fromcell, x$tocell)
+sp <- cbind(x$fromcell, x$tocell)
 
-# Plot first 10 cells using XY limits
-plot(x[1,"x1"], x[1,"x1"], xlim=c(min(x[,"x1"]), max(x[,"x1"])), ylim = c(min(x[,"y1"]), max(x[,"y1"])))
 
-# Take the first ten cells and plot their vectors
-i <- x[1:10,]
-arrows(i[,1], i[,2], i[,4], i[,5])
+f <- rasterToPoints(fc1)
+# Correct temperature and precipitation values
+f[, "prcp"] <- f[, "prcp"]*10
+
+
+# # Plot first 10 cells using XY limits
+# plot(x[1,"x1"], x[1,"x1"], xlim=c(min(x[,"x1"]), max(x[,"x1"])), ylim = c(min(x[,"y1"]), max(x[,"y1"])))
+# 
+# # Take the first ten cells and plot their vectors
+# i <- x[1:10,]
+# arrows(i[,1], i[,2], i[,4], i[,5])
 
 
 
