@@ -11,9 +11,11 @@ setwd("D:/Eawag/course - Spatial Modelling/ClimateVelocity/")
 
 # Current climate must be divided by 100 to get degrees Celsius
 cc <- stack("inputs/current_climate/currentclimate_1971-2000.grd")
+# cc <- crop(cc, extent(c(5e5, 1e6, 0, 5e5)))
 
 # Scenario 1: RCP45
 rcp45.fc1 <- stack("inputs/future_climate/rcp45/CLMcom_CCLM4-8-17_MOHC_HadGEM2-ES_ar5_wc_rcp45.grd")
+# rcp45.fc1 <- crop(rcp45.fc1, extent(c(5e5, 1e6, 0, 5e5)))
 rcp45.fc2 <- stack("inputs/future_climate/rcp45/DMI_HIRHAM5_ICHEC_EC-EARTH_ar5_wc_rcp45.grd")
 rcp45.fc3 <- stack("inputs/future_climate/rcp45/KNMI_RACMO22E_ICHEC_EC-EARTH_ar5_wc_rcp45.grd")
 
@@ -30,7 +32,11 @@ rcp85.fc3 <- stack("inputs/future_climate/rcp85/KNMI_RACMO22E_ICHEC_EC-EARTH_ar5
 # - climVar: string of current climate variable: "tas" / "prcp"
 # - threshold: future cells with value within present cell value +/- threshold (integer)
 # - cores: number of physical CPU cores to be used in computation (integer)
-
+#
+# Outputs:
+# - list of 'df' dataframe and 'd' vector
+# - df contains spatial gradient, temporal gradient, and climate velocity
+# - d contains original distances
 CV <- function(pRaster, fRaster, cVar, cores, threshold) {
   present <- rasterToPoints(pRaster)
   present[,"tas"] <- present[,"tas"]/100
@@ -49,7 +55,7 @@ CV <- function(pRaster, fRaster, cVar, cores, threshold) {
     fcVar <- "fprcp"
   }
   
-  ### SPATIAL GRADIENT ###
+  ### EXTRACT VECTORS and UNIQUE VALUES ###
   t <- threshold          # plus/minus threshold to define climate match
   t <- 1/(t*2)            # inverse for rounding, double for plus/minus
   
@@ -58,8 +64,8 @@ CV <- function(pRaster, fRaster, cVar, cores, threshold) {
   p <- round(present[, cVar]*t)/t   # vector of rounded present climate values 
   f <- round(future[, fcVar]*t)/t   # vector of rounded future climate values
   
-  u <- unique(p)[order(unique(p))]            # list of unique climate values in p
-  m <- sapply(u, function(i){c(which(i==f))}) # list of climate matches for unique values
+  u <- unique(p)[order(unique(p))]            # list of unique present climate values
+  m <- sapply(u, function(i){c(which(i==f))}) # list of future climate matches for unique values
   
   ### PARALLELIZED LOOP ###
   cl <- makeCluster(cores)
@@ -68,9 +74,9 @@ CV <- function(pRaster, fRaster, cVar, cores, threshold) {
     mi   <- m[[which(u==p[i])]]          # recalls list of climate matches for p[i]
     sqrt(min((x[i]-x[mi])^2 + (y[i]-y[mi])^2))    # distance to closest match
   })
-  
-  stopCluster(cl) # Stop the cluster
+  stopCluster(cl)
 
+  # Combine all results in dataframe
   # Keep original results and replace Inf with 10,000m
   q <- d
   q[q==Inf] <- 10000
@@ -82,15 +88,15 @@ CV <- function(pRaster, fRaster, cVar, cores, threshold) {
   df <- na.omit(df)
   
   ### TEMPORAL GRADIENT ###
-  # future - current tas
-  # divided by 100
-  df$tempg <- (df[, fcVar] - df$tas)/100 # Divide by years 2100-2000 
+  # Get the temporal gradient (delta C/yr)
+  df$tempg <- (df[, fcVar] - df[, cVar])/100 # Divide by 100 years 
   
   ### SPATIAL GRADIENT ###
-  # Get the spatial gradient (degrees C/km)
-  df$spatg <- ((df[, fcVar] - df$tas)*100)/df$dist
+  # Get the spatial gradient (delta C/km)
+  df$spatg <- (df[, fcVar] - df[, cVar])/df$dist
   
-  # Get the temporal gradient (degrees C/yr)
+  ### CLIMATE VELOCITY ###
+  # Get the climate velocity
   df$vector <- df$tempg/df$spatg
    
   ### PLOT VECTOR FIELD MAP ###
@@ -100,7 +106,8 @@ CV <- function(pRaster, fRaster, cVar, cores, threshold) {
   r <- rasterFromXYZ(vdf, crs=proj)
   vectorplot(r, par.settings=RdBuTheme())
   
-  output <- list(d, df)
+  # Output the results
+  output <- list("d" = d, "data" = df)
   return(output)
 }
 
